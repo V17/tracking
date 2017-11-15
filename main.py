@@ -2,9 +2,9 @@
 __author__ = 'Vojtech Vozab'
 
 import networkx as nx
-import matplotlib.pyplot as plt
 from itertools import izip_longest
 from math import sqrt
+
 
 class TipCoords:
     def __init__(self, coords, timeframe):
@@ -16,8 +16,21 @@ class TipCoords:
     def add_coordinate(self, coords):
         self.coords_list.append(coords)
 
-    def get_last_coord(self):
-        return self.coords_list[len(self.coords_list)-1]
+    def get_last_coord(self, framedif):
+        if len(self.coords_list) <= framedif:
+            framedif = len(self.coords_list)
+        for i in range(framedif):
+            if self.coords_list[len(self.coords_list)-i-1] != (-1, -1, -1):
+                return self.coords_list[len(self.coords_list)-i-1]
+
+    def get_coords(self):
+        return self.coords_list
+
+    def get_match(self, timeframe):
+        if timeframe > len(self.coords_list)-1:
+            print "match not yet made"
+        else:
+            return (self.coords_list[timeframe-1], self.coords_list[timeframe])
 
 
 class TipSet:
@@ -31,10 +44,44 @@ class TipSet:
     def set_timeframe(self, timeframe):
         self.timeframe = timeframe
 
-    def add_coords_to_tip(self, old_coords, new_coords):
+    def get_timeframe(self):
+        return self.timeframe
+
+    def increment_timeframe(self):
+        self.timeframe += 1
         for tip in self.tip_list:
-            if old_coords == tip.get_last_coord():
+
+            if len(tip.get_coords()) < (self.timeframe):
+                tip.add_coordinate((-1, -1, -1))
+
+    def add_coords_to_tip(self, old_coords, new_coords, framedif=1):
+        for tip in self.tip_list:
+            if old_coords == tip.get_last_coord(framedif):
                 tip.add_coordinate(new_coords)
+                return 1
+        print "error: tip that should have existed not found"
+        return 0
+
+    def get_last_frame(self, framedif=1):
+        coordlist = []
+        for tip in self.tip_list:
+            coord = tip.get_last_coord(framedif)
+            if coord is not None:
+                coordlist.append(tip.get_last_coord(framedif))
+        return coordlist
+
+    def get_all_points(self):
+        for tip in self.tip_list:
+            offsets = []
+            for coord in tip.get_coords():
+                offsets.append(get_offset_from_xyz(coord, sizex, sizey))
+            print offsets
+
+    def get_matches_for_frame(self, timeframe):
+        matches = []
+        for tip in self.tip_list:
+            matches.append(tip.get_match(timeframe))
+        return matches
 
 
 
@@ -83,7 +130,33 @@ def get_offset_from_xyz(xyz, sizex, sizey):
         return z * sizex * sizey + y * sizex + x
 
 
-def build_bipartite_graph(points1, points2, maxdist=0.000001):
+def build_bipartite_graph2(matched_points, new_points, maxdist=0.05, framedif=1):
+    old_points = matched_points.get_last_frame(framedif)
+    new_points = [x for x in new_points if x != (-1, -1, -1)]
+    size1 = len(old_points)
+    size2 = len(new_points)
+    if size1 < size2:
+        for i in range(size2-size1):
+            old_points.append((-1, -1, -1))
+    for i in range(size1):
+        new_points.append((-1, -1, -1))
+    G = nx.complete_bipartite_graph(len(old_points), len(new_points))
+
+    for i in range(0, len(old_points)):
+        for j in range(0, len(new_points)):
+            if new_points[j] != (-1, -1, -1) and old_points[i] != (-1, -1, -1):
+                dist = anisotropic_euclid_distance(old_points[i], new_points[j])
+            elif new_points[j] == (-1, -1, -1) and old_points[i] == (-1, -1, -1):
+                dist = 0.000001
+            else:
+                dist = maxdist
+            G.edge[i][j + len(old_points)]['weight'] = dist
+            G.node[i]['coordinates'] = old_points[i]
+            G.node[j + len(old_points)]['coordinates'] = new_points[j]
+    return G
+
+    
+def build_bipartite_graph(points1, points2, maxdist=0.05):
     """
     Builds a bipartite graph from 2 sets of points and writes the euclidean distance into the edge weights and point
     coordinates into the nodes
@@ -93,9 +166,9 @@ def build_bipartite_graph(points1, points2, maxdist=0.000001):
     points1 = [x for x in points1 if x != (-1, -1, -1)]
     points2 = [x for x in points2 if x != (-1, -1, -1)]
     size1 = len(points1)
-    size2 = len(points2)
     for i in range(len(points1)):
         points2.append((-1, -1, -1))
+    size2 = len(points2)
 
     print "matching", len(points1)+len(points2), "points"
     print "set 1:", points1
@@ -104,7 +177,7 @@ def build_bipartite_graph(points1, points2, maxdist=0.000001):
 
     for i in range(0, size1):
         for j in range(0, size2):
-            if points1[i] != (-1, -1, -1) and points2[j] != (-1, -1, -1):
+            if points2[j] != (-1, -1, -1):
                 dist = anisotropic_euclid_distance(points1[i], points2[j])
             else:
                 dist = maxdist
@@ -139,6 +212,27 @@ def anisotropic_euclid_distance(point1, point2, zratio=0.125):
     return dist
 
 
+def add_matched_pairs(coord_pairs, matched_points):
+    matched_points.increment_timeframe()
+    for pair in coord_pairs:
+        coord1 = pair[0]
+        coord2 = pair[1]
+        if coord1 != (-1, -1, -1):
+            if matched_points.add_coords_to_tip(coord1, coord2) == 1:
+                continue
+            else:
+                print "error with coords", coord1, coord2
+
+        elif coord2 != (-1, -1, -1):
+            matched_points.add_new_tip(coord2)
+            #print "added new tip in coordinates", coord2
+
+        else:
+            continue
+            #print "match not added", coord1, coord2
+
+
+
 def check_points(coord_pairs, points, frame):
     """
     Checks the generated matches with the original matches from the loaded point file
@@ -166,13 +260,53 @@ def check_points(coord_pairs, points, frame):
     return true_matches, false_matches, unmatched
 
 
-filename = "./tip_tracking/ID428/tip_trajectories_pxOffsets.txt"
-sizex = 314
-sizey = 261
+def check_correct_matches(detected_tipset, control_tipset):
+    for i in range(1, len(detected_tipset.tip_list)):
+        detected = detected_tipset.get_matches_for_frame(i)
+        control = control_tipset.get_matches_for_frame(i)
+        for match1 in detected:
+            for match2 in control:
+                if match1[0] == match2[0]:
+                    if match1[1] == match2[1]:
+                        print "correctly matched", match1
+                    else:
+                        print "wrongly matched", match1, "should be", match2
+
+
+def build_control_tipset(control_points):
+    control_tipset = TipSet()
+    for coord in range(len(control_points[0])):
+        temptip = TipCoords(control_points[0][coord], 0)
+        for frame in range(1, len(control_points)):
+            temptip.add_coordinate(control_points[frame][coord])
+        control_tipset.tip_list.append(temptip)
+    return control_tipset
+
+filename = "./tip_tracking/ID426/tip_trajectories_pxOffsets.txt"
+sizex = 295
+sizey = 317
 points_list = read_points(filename, sizex, sizey)
 total_true_matches = 0
 total_false_matches = 0
 total_unmatched = 0
+tipset = TipSet()
+for coordinate in points_list[0]:
+    if coordinate != (-1, -1, -1):
+        tipset.add_new_tip(coordinate)
+
+
+control = build_control_tipset(points_list)
+
+for i in range(len(points_list)-1):
+    b_g = build_bipartite_graph2(tipset, points_list[i+1])
+    pairs = find_max_match(b_g)
+    add_matched_pairs(pairs, tipset)
+    #tipset.get_all_points()
+    print "-----"
+check_correct_matches(tipset, control)
+
+
+'''
 for i in range(len(points_list)-1):
     print "matching frames", i, ",", i+1
     b_g = build_bipartite_graph(points_list[i], points_list[i+1])
@@ -181,6 +315,6 @@ for i in range(len(points_list)-1):
     total_true_matches += matches[0]
     total_false_matches += matches[1]
     total_unmatched += matches[2]
-
-print "Matched", total_true_matches, "correctly and", total_false_matches, "incorrectly in total, ", total_unmatched, "pairs were not matched."
+'''
+#print "Matched", total_true_matches, "correctly and", total_false_matches, "incorrectly in total, ", total_unmatched, "pairs were not matched."
 
