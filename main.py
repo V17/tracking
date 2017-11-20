@@ -22,7 +22,8 @@ class TipCoords:
         for i in range(framedif):
             if self.coords_list[len(self.coords_list)-i-1] != (-1, -1, -1):
                 return self.coords_list[len(self.coords_list)-i-1]
-
+        return (-1, -1, -1)
+        
     def get_coords(self):
         return self.coords_list
 
@@ -79,8 +80,12 @@ class TipSet:
 
     def get_matches_for_frame(self, timeframe):
         matches = []
+        if timeframe > self.timeframe or self.timeframe < 2:
+            print "no matches made yet for timeframe", timeframe, "current timeframe:", self.timeframe
+            return []
         for tip in self.tip_list:
             matches.append(tip.get_match(timeframe))
+        #print "successfuly returning matches for timeframes", timeframe, "and", timeframe-1
         return matches
 
 
@@ -147,7 +152,7 @@ def build_bipartite_graph2(matched_points, new_points, maxdist=0.05, framedif=1)
             if new_points[j] != (-1, -1, -1) and old_points[i] != (-1, -1, -1):
                 dist = anisotropic_euclid_distance(old_points[i], new_points[j])
             elif new_points[j] == (-1, -1, -1) and old_points[i] == (-1, -1, -1):
-                dist = 0.000001
+                dist = 0.00000
             else:
                 dist = maxdist
             G.edge[i][j + len(old_points)]['weight'] = dist
@@ -261,16 +266,35 @@ def check_points(coord_pairs, points, frame):
 
 
 def check_correct_matches(detected_tipset, control_tipset):
-    for i in range(1, len(detected_tipset.tip_list)):
+    correct_matches = 0
+    wrong_matches = 0
+    found = 0
+    vanished = 0
+    for i in range(1, len(detected_tipset.tip_list[0].coords_list)):
         detected = detected_tipset.get_matches_for_frame(i)
         control = control_tipset.get_matches_for_frame(i)
+        #print "detected:", detected
+        #print "control:", control
         for match1 in detected:
-            for match2 in control:
-                if match1[0] == match2[0]:
-                    if match1[1] == match2[1]:
-                        print "correctly matched", match1
-                    else:
-                        print "wrongly matched", match1, "should be", match2
+            if match1[0] != (-1, -1, -1) and match1[1] != (-1, -1, -1):
+                for match2 in control:
+                    if match1[0] == match2[0] and match1[0] != (-1, -1, -1):
+                        if match1[1] == match2[1]:
+                            print "correctly matched", match1
+                            correct_matches += 1
+                        else:
+                            print "wrongly matched", match1, "should be", match2
+                            wrong_matches += 1
+            elif match1[0] == (-1, -1, -1) and match1[1] != (-1, -1, -1):
+                print "new tip found at", match1[1]
+                found += 1
+            elif match1[0] != (-1, -1, -1) and match1[1] == (-1, -1, -1):
+                print "tip vanished from", match1[0]
+                vanished += 1
+            else:
+                continue #(-1, -1, -1) matched to (-1, -1, -1)
+        print "-----"
+    print "Total score:", correct_matches, "matched correctly,", wrong_matches, "matched incorrectly,", found, "new tips,", vanished, "vanished tips"
 
 
 def build_control_tipset(control_points):
@@ -280,6 +304,7 @@ def build_control_tipset(control_points):
         for frame in range(1, len(control_points)):
             temptip.add_coordinate(control_points[frame][coord])
         control_tipset.tip_list.append(temptip)
+    control_tipset.set_timeframe(len(control_points[0]))
     return control_tipset
 
 filename = "./tip_tracking/ID426/tip_trajectories_pxOffsets.txt"
@@ -297,7 +322,7 @@ for coordinate in points_list[0]:
 
 control = build_control_tipset(points_list)
 
-for i in range(len(points_list)-1):
+for i in range(len(points_list[0])-1):
     b_g = build_bipartite_graph2(tipset, points_list[i+1])
     pairs = find_max_match(b_g)
     add_matched_pairs(pairs, tipset)
@@ -306,15 +331,4 @@ for i in range(len(points_list)-1):
 check_correct_matches(tipset, control)
 
 
-'''
-for i in range(len(points_list)-1):
-    print "matching frames", i, ",", i+1
-    b_g = build_bipartite_graph(points_list[i], points_list[i+1])
-    pairs = find_max_match(b_g)
-    matches = check_points(pairs, points_list, i)
-    total_true_matches += matches[0]
-    total_false_matches += matches[1]
-    total_unmatched += matches[2]
-'''
-#print "Matched", total_true_matches, "correctly and", total_false_matches, "incorrectly in total, ", total_unmatched, "pairs were not matched."
 
