@@ -29,8 +29,8 @@ class TipSet:
                 new_points.append(coord)
         for i in range(len(old_points)):
             new_points.append((-1, -1, -1))
-        print "old points", old_points
-        print "new points", new_points
+        # print "old points", len(old_points), old_points
+        # print "new points", len(new_points), new_points
 
         # Build a bipartite graph, set weights to inverse of euclidean distance
         G = nx.complete_bipartite_graph(len(old_points), len(new_points))
@@ -49,12 +49,16 @@ class TipSet:
     def get_max_weight_matches(self, graph):
         # Compute the max weight matching and remove redundant edges (existing edges with inverse orientation)
         H = nx.max_weight_matching(graph)
-        for i in range(len(H)/2, len(H)):
-            del H[i]
+        unique_keys = []
+        # delete non-unique edges where x>y = y<x
+        for key in H:
+            if key not in unique_keys:
+                unique_keys.append(H[key])
+        for key in unique_keys:
+            del H[key]
         matches = {}
         for edge in H:
             matches[graph.node[edge]['coordinates']] = graph.node[H[edge]]['coordinates']
-        print matches
         return matches
 
     def add_matches(self, matches_dict):
@@ -70,7 +74,10 @@ class TipSet:
                     if matches_dict[match[self.timeframe]] != (-1, -1, -1):
                         new_points.remove(matches_dict[match[self.timeframe]])
                 except ValueError:
-                    print "coord not in new_points list:", matches_dict[match[self.timeframe]]
+                    print "something broke, coord not in new_points list:", matches_dict[match[self.timeframe]]
+            else:
+                # tip not present in this frame
+                match.append((-1, -1, -1))
         for new_point in new_points:
             temp_coords = []
             for i in range(self.timeframe+1):
@@ -85,6 +92,13 @@ class TipSet:
             if coords[self.timeframe] != (-1, -1, -1):
                 coordlist.append(coords[self.timeframe])
         return coordlist
+
+    def get_pairs_for_frame(self, timeframe):
+        pairs = []
+        for coord_sequence in self.match_list:
+            pairs.append(([coord_sequence[timeframe-1]], coord_sequence[timeframe]))
+        return
+
 
 
 def read_points(filename, sizex, sizey):
@@ -106,6 +120,29 @@ def read_points(filename, sizex, sizey):
     for frame in data_split:
         coord_list.append([get_xyz_coords(x, sizex, sizey) for x in frame])
     return coord_list
+
+
+def build_control_tipset(coord_list, sizex, sizey):
+    control = TipSet(sizex, sizey, coord_list)
+    control.match_list = []
+    for coord in control.frame_list[0]:
+        control.match_list.append([coord])
+    for frame in range(1, len(control.frame_list)):
+        for point in range(len(control.frame_list[frame])):
+            control.match_list[point].append(control.frame_list[frame][point])
+    control.timeframe = len(control.match_list[0])-1
+    return control
+
+
+def check_found_and_control(found, control):
+    for frame in range(1, len(found.match_list[0])-1):
+        found_pairs = found.get_pairs_for_frame(frame)
+        control_pairs = control.get_pairs_for_frame(frame)
+        for pair in found_pairs:
+            if pair[0] != (-1, -1, -1) and pair[1] != (-1, -1, -1):
+                pass
+
+
 
 
 def get_xyz_coords(offset, sizex, sizey):
@@ -221,10 +258,13 @@ def check_correct_matches(detected_tipset, control_tipset):
 def apply_and_check(filename, sizex, sizey, frames=0):
     points_list = read_points(filename, sizex, sizey)
     tipset = TipSet(sizex, sizey, points_list)
-    G = tipset.get_max_bipartite_graph()
-    matches = tipset.get_max_weight_matches(G)
-    tipset.add_matches(matches)
-    print tipset.match_list
+    for i in range(len(points_list)-1):
+        print "timeframe is", tipset.timeframe
+        G = tipset.get_max_bipartite_graph()
+        matches = tipset.get_max_weight_matches(G)
+        tipset.add_matches(matches)
+    control = build_control_tipset(points_list, sizex, sizey)
+    print control.match_list
 
 
 apply_and_check("./tip_tracking/ID319/tip_trajectories_pxOffsets.txt", 159, 146, 0)
