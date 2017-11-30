@@ -6,6 +6,7 @@ from itertools import izip_longest
 from math import sqrt
 from operator import add
 
+
 class TipSet:
     def __init__(self, sizex, sizey, coordlist, maxdist=0.05):
         """after initialization the timeframe is set to 0, the list of frames is filled and match_list contains
@@ -157,15 +158,25 @@ def check_found_and_control(found, control, frame, framedif):  # funguje to, ale
             else:
                 incorrectly_matched += 1
         elif pair[0] == (-1, -1, -1) and pair[1] != (-1, -1, -1):  # tady by se melo checkovat o par frejmu zpatky
+            matches_index = found_pairs.index(pair)
+            last_coord = found.get_last_location(found.match_list[matches_index], framedif)
+            if last_coord == (-1, -1, -1):
+                if pair in control_pairs:
+                    correctly_found += 1
+                else:
+                    incorrectly_found += 1
+            else:
+                last_real_coord = control.get_last_location(control.match_list[matches_index], framedif)
+                if last_coord == last_real_coord:
+                    correctly_matched += 1
+                else:
+                    incorrectly_matched += 1
+
+        elif pair[0] != (-1, -1, -1) and pair[1] == (-1, -1, -1):
             if pair in control_pairs:
                 correctly_vanished += 1
             else:
                 incorrectly_vanished += 1
-        elif pair[0] != (-1, -1, -1) and pair[1] == (-1, -1, -1):
-            if pair in control_pairs:
-                correctly_found += 1
-            else:
-                incorrectly_found += 1
         else:  # (-1, -1, -1) matched with (-1, -1, -1) = point doesn't exist in this timeframe
             pass
 
@@ -212,21 +223,24 @@ def convert_match_to_offset(match, sizex, sizey):
     return get_offset_from_xyz(match[0], sizex, sizey), get_offset_from_xyz(match[1], sizex, sizey)
 
 
-def apply_and_check(filename, sizex, sizey, frames=0):
+def apply_and_check(filename, sizex, sizey, frames=0, framedif=1):
     points_list = read_points(filename, sizex, sizey)
-    tipset = TipSet(sizex, sizey, points_list, 0.005)  # s moc malou hranici pada, proc?
+    if len(points_list) == 0:
+        print "empty list"
+        return 0
+    tipset = TipSet(sizex, sizey, points_list, 0.01)  # s moc malou hranici pada, proc?
     for i in range(len(points_list)-1):
-        G = tipset.get_max_bipartite_graph(5)
+        G = tipset.get_max_bipartite_graph(framedif)
         matches = tipset.get_max_weight_matches(G)
-        tipset.add_matches(matches, 5)
+        tipset.add_matches(matches, framedif)
 
     # checking section
     results = [0, 0, 0, 0, 0, 0]
     control = build_control_tipset(points_list, sizex, sizey)
     for frame in range(1, len(points_list)):
-        tempresults = check_found_and_control(tipset, control, frame)
+        tempresults = check_found_and_control(tipset, control, frame, framedif)
         results = map(add, results, tempresults)
-    print "Checking file", filename
+    print "Checking file", filename, "maximum time gap between two tips is", framedif, "frames"
     print "correctly matched:", results[0], "incorrectly matched:", results[1]
     print "correctly recognized as new:", results[4], "incorrectly recognized as new:", results[5]
     print "correctly recognized as vanishing:", results[2], "incorrectly recognized as vanishing:", results[3]
@@ -235,5 +249,5 @@ def apply_and_check(filename, sizex, sizey, frames=0):
         print [get_offset_from_xyz(item, sizex, sizey) for item in point]
 
 
-apply_and_check("./real_images/real-control-01.txt", 220, 220, 0)
+apply_and_check("./real_images/real-phosphodefective-03.txt", 400, 270, 0, 2)
 
