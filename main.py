@@ -4,7 +4,7 @@ __author__ = 'Vojtech Vozab'
 import networkx as nx
 from itertools import izip_longest
 from math import sqrt
-
+from operator import add
 
 class TipSet:
     def __init__(self, sizex, sizey, coordlist, maxdist=0.05):
@@ -20,17 +20,15 @@ class TipSet:
             if coord != (-1, -1, -1):
                 self.match_list.append([coord])
 
-    def get_max_bipartite_graph(self):
+    def get_max_bipartite_graph(self, framedif=1):
         # Initialize lists of existing points and new points, add dummy points into new points list
-        old_points = self.get_last_frame()
+        old_points = self.get_last_frame(framedif)
         new_points = []
         for coord in self.frame_list[self.timeframe+1]:
             if coord != (-1, -1, -1):
                 new_points.append(coord)
         for i in range(len(old_points)):
             new_points.append((-1, -1, -1))
-        # print "old points", len(old_points), old_points
-        # print "new points", len(new_points), new_points
 
         # Build a bipartite graph, set weights to inverse of euclidean distance
         G = nx.complete_bipartite_graph(len(old_points), len(new_points))
@@ -61,20 +59,21 @@ class TipSet:
             matches[graph.node[edge]['coordinates']] = graph.node[H[edge]]['coordinates']
         return matches
 
-    def add_matches(self, matches_dict):
+    def add_matches(self, matches_dict, framedif=1):
         # add matched pairs and vanishing points into match_list, find and add new points, increase the timeframe
         new_points = []
         for coord in self.frame_list[self.timeframe+1]:
             if coord != (-1, -1, -1):
                 new_points.append(coord)
         for match in self.match_list:
-            if match[self.timeframe] != (-1, -1, -1):
-                match.append(matches_dict[match[self.timeframe]])
+            current_coord = self.get_last_location(match, framedif)
+            if current_coord != (-1, -1, -1):
+                match.append(matches_dict[current_coord])
                 try:
-                    if matches_dict[match[self.timeframe]] != (-1, -1, -1):
-                        new_points.remove(matches_dict[match[self.timeframe]])
+                    if matches_dict[current_coord] != (-1, -1, -1):
+                        new_points.remove(matches_dict[current_coord])
                 except ValueError:
-                    print "something broke, coord not in new_points list:", matches_dict[match[self.timeframe]]
+                    print "something broke, coord not in new_points list:", matches_dict[current_coord]
             else:
                 # tip not present in this frame
                 match.append((-1, -1, -1))
@@ -86,19 +85,27 @@ class TipSet:
             self.match_list.append(temp_coords)
         self.timeframe +=1
 
-    def get_last_frame(self, framedif=1):  # TODO: implement looking back
+    def get_last_location(self, match, framedif):
+        result = (-1, -1, -1)
+        for i in range(framedif):
+            if match[self.timeframe-i] != (-1, -1, -1):
+                return match[self.timeframe-i]
+        return result
+
+    def get_last_frame(self, framedif=1):
         coordlist = []
         for coords in self.match_list:
-            if coords[self.timeframe] != (-1, -1, -1):
-                coordlist.append(coords[self.timeframe])
+            for i in range(framedif):
+                if coords[self.timeframe-i] != (-1, -1, -1):
+                    coordlist.append(coords[self.timeframe-i])
+                    break
         return coordlist
 
     def get_pairs_for_frame(self, timeframe):
         pairs = []
         for coord_sequence in self.match_list:
-            pairs.append(([coord_sequence[timeframe-1]], coord_sequence[timeframe]))
-        return
-
+            pairs.append((coord_sequence[timeframe-1], coord_sequence[timeframe]))
+        return pairs
 
 
 def read_points(filename, sizex, sizey):
@@ -134,15 +141,35 @@ def build_control_tipset(coord_list, sizex, sizey):
     return control
 
 
-def check_found_and_control(found, control):
-    for frame in range(1, len(found.match_list[0])-1):
-        found_pairs = found.get_pairs_for_frame(frame)
-        control_pairs = control.get_pairs_for_frame(frame)
-        for pair in found_pairs:
-            if pair[0] != (-1, -1, -1) and pair[1] != (-1, -1, -1):
-                pass
+def check_found_and_control(found, control, frame, framedif):  # funguje to, ale je potreba divat se o x kroku zpatky... uf.
+    found_pairs = found.get_pairs_for_frame(frame)
+    control_pairs = control.get_pairs_for_frame(frame)
+    correctly_matched = 0
+    incorrectly_matched = 0
+    correctly_vanished = 0
+    incorrectly_vanished = 0
+    correctly_found = 0
+    incorrectly_found = 0
+    for pair in found_pairs:
+        if pair[0] != (-1, -1, -1) and pair[1] != (-1, -1, -1):
+            if pair in control_pairs:
+                correctly_matched += 1
+            else:
+                incorrectly_matched += 1
+        elif pair[0] == (-1, -1, -1) and pair[1] != (-1, -1, -1):  # tady by se melo checkovat o par frejmu zpatky
+            if pair in control_pairs:
+                correctly_vanished += 1
+            else:
+                incorrectly_vanished += 1
+        elif pair[0] != (-1, -1, -1) and pair[1] == (-1, -1, -1):
+            if pair in control_pairs:
+                correctly_found += 1
+            else:
+                incorrectly_found += 1
+        else:  # (-1, -1, -1) matched with (-1, -1, -1) = point doesn't exist in this timeframe
+            pass
 
-
+    return [correctly_matched, incorrectly_matched, correctly_vanished, incorrectly_vanished, correctly_found, incorrectly_found]
 
 
 def get_xyz_coords(offset, sizex, sizey):
@@ -181,91 +208,32 @@ def anisotropic_euclid_distance(point1, point2, zratio=0.125):
     return dist
 
 
-def check_points(coord_pairs, points, frame, sizex, sizey):
-    """
-    Checks the generated matches with the original matches from the loaded point file
-    :param points: original point pairs loaded from file
-    :param frame: int, indicates which time frame is checked with its next neighbor
-    """
-    true_matches = 0
-    false_matches = 0
-    unmatched = 0
-    for pair in coord_pairs:
-        coord1 = pair[0]
-        coord2 = pair[1]
-        point_index = points[frame].index(coord1)
-        if coord1 == (-1, -1, -1) or coord2 == (-1, -1, -1):
-            unmatched += 1
-        else:
-            if points[frame+1][point_index] == coord2:
-                true_matches += 1
-                print "matched point", get_offset_from_xyz(coord1, sizex, sizey), coord1, "with", get_offset_from_xyz(coord2, sizex, sizey), coord2, "correctly"
-            else:
-                false_matches += 1
-                print "matched point", get_offset_from_xyz(coord1, sizex, sizey), coord1, "with", get_offset_from_xyz(coord2, sizex, sizey), coord2, "incorrectly, correct match was", get_offset_from_xyz(points[frame+1][point_index], sizex, sizey), points[frame+1][point_index]
-    print "true matches:", true_matches, ", false matches:", false_matches, "unmatched:", unmatched
-    print "---"
-    return true_matches, false_matches, unmatched
-
-
 def convert_match_to_offset(match, sizex, sizey):
     return get_offset_from_xyz(match[0], sizex, sizey), get_offset_from_xyz(match[1], sizex, sizey)
 
 
-def check_correct_matches(detected_tipset, control_tipset):
-    correct_matches = 0
-    wrong_matches = 0
-    incorrectly_found = 0
-    incorrectly_vanished = 0
-    for i in range(1, len(detected_tipset.tip_list[0].coords_list)):
-        detected = detected_tipset.get_matches_for_frame(i)
-        control = control_tipset.get_matches_for_frame(i)
-        sizex = detected_tipset.sizex
-        sizey = detected_tipset.sizey
-        print "comparing matches in frames", i-1, "and", i
-        for match1 in detected:
-            if match1[0] != (-1, -1, -1) and match1[1] != (-1, -1, -1):
-                for match2 in control:
-                    if match1[0] == match2[0] and match1[0] != (-1, -1, -1):
-                        if match1[1] == match2[1]:
-                            print "correctly matched", convert_match_to_offset(match1, sizex, sizey)
-                            correct_matches += 1
-                        else:
-                            print "wrongly matched", convert_match_to_offset(match1, sizex, sizey), "should be", convert_match_to_offset(match2, sizex, sizey)
-                            wrong_matches += 1
-            elif match1[0] == (-1, -1, -1) and match1[1] != (-1, -1, -1):
-                for match2 in control:
-                    if match2[0] == (-1, -1, -1) and match1[1] == match2[1]:
-                        print "new tip found at", get_offset_from_xyz(match1[1], sizex, sizey)
-                    if match2[1] == match1[1] and match2[0] != (-1, -1, -1):
-                        print "existing tip incorrectly recognized as new at", get_offset_from_xyz(match1[1], sizex, sizey)
-                        incorrectly_found += 1
-
-            elif match1[0] != (-1, -1, -1) and match1[1] == (-1, -1, -1):
-                for match2 in control:
-                    if match2[0] == match1[0] and match2[1] != (-1, -1, -1):
-                        print "tip incorrectly recognized as vanishing at", get_offset_from_xyz(match1[0], sizex, sizey)
-                        incorrectly_vanished += 1
-                    if match2[0] == match1[0] and match2[1] == (-1, -1, -1):
-                        print "tip correctly recognized as vanishing at", get_offset_from_xyz(match1[0], sizex, sizey)
-
-            else:
-                continue  # (-1, -1, -1) matched to (-1, -1, -1)
-        print "-----"
-    print "Total score:", correct_matches, "matched correctly,", wrong_matches, "matched incorrectly,", incorrectly_found, "incorrectly labeled as new,", incorrectly_vanished, "incorrectly labeled as vanished"
-
-
 def apply_and_check(filename, sizex, sizey, frames=0):
     points_list = read_points(filename, sizex, sizey)
-    tipset = TipSet(sizex, sizey, points_list)
+    tipset = TipSet(sizex, sizey, points_list, 0.005)  # s moc malou hranici pada, proc?
     for i in range(len(points_list)-1):
-        print "timeframe is", tipset.timeframe
-        G = tipset.get_max_bipartite_graph()
+        G = tipset.get_max_bipartite_graph(5)
         matches = tipset.get_max_weight_matches(G)
-        tipset.add_matches(matches)
+        tipset.add_matches(matches, 5)
+
+    # checking section
+    results = [0, 0, 0, 0, 0, 0]
     control = build_control_tipset(points_list, sizex, sizey)
-    print control.match_list
+    for frame in range(1, len(points_list)):
+        tempresults = check_found_and_control(tipset, control, frame)
+        results = map(add, results, tempresults)
+    print "Checking file", filename
+    print "correctly matched:", results[0], "incorrectly matched:", results[1]
+    print "correctly recognized as new:", results[4], "incorrectly recognized as new:", results[5]
+    print "correctly recognized as vanishing:", results[2], "incorrectly recognized as vanishing:", results[3]
+    print "-------------------"
+    for point in tipset.match_list:
+        print [get_offset_from_xyz(item, sizex, sizey) for item in point]
 
 
-apply_and_check("./tip_tracking/ID319/tip_trajectories_pxOffsets.txt", 159, 146, 0)
+apply_and_check("./real_images/real-control-01.txt", 220, 220, 0)
 
