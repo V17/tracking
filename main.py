@@ -52,8 +52,8 @@ class TipSet:
         unique_keys = []
         # delete non-unique edges where x>y = y<x
         for key in H:
-            if key not in unique_keys:
-                unique_keys.append(H[key])
+            if key > H[key]:
+                unique_keys.append(key)
         for key in unique_keys:
             del H[key]
         matches = {}
@@ -70,7 +70,11 @@ class TipSet:
         for match in self.match_list:
             current_coord = self.get_last_location(match, framedif)
             if current_coord != (-1, -1, -1):
-                match.append(matches_dict[current_coord])
+                try:
+                    match.append(matches_dict[current_coord])
+                except KeyError:
+                    print "looking for", current_coord, "in", matches_dict, "failed"
+                    # print "last two frames", new_points, self.frame_list[self.timeframe]
                 try:
                     if matches_dict[current_coord] != (-1, -1, -1):
                         new_points.remove(matches_dict[current_coord])
@@ -85,7 +89,7 @@ class TipSet:
                 temp_coords.append((-1, -1, -1))
             temp_coords.append(new_point)
             self.match_list.append(temp_coords)
-        self.timeframe +=1
+        self.timeframe += 1
 
     def get_last_location(self, match, framedif):
         result = (-1, -1, -1)
@@ -209,6 +213,66 @@ def check_found_and_control(found, control, frame, framedif):  # funguje to, ale
     return [correctly_matched, incorrectly_matched, correctly_vanished, incorrectly_vanished, correctly_found, incorrectly_found]
 
 
+def check_found_and_control_f1(found, control, frame, framedif):
+    found_pairs2 = found.get_pairs_for_frame(frame)
+    control_pairs2 = control.get_pairs_for_frame(frame)
+    found_pairs = []
+    control_pairs = []
+    tp = 0
+    tn = 0
+    fp = 0
+    fn = 0
+
+    for pair in found_pairs2:
+        if pair[0] == (-1, -1, -1) and pair[1] != (-1, -1, -1):
+            matches_index_found = found.get_complete_frame(frame).index(pair[1])
+            last_coord = found.get_last_location_check(found.match_list[matches_index_found], framedif, frame - 1)
+            found_pairs.append((last_coord, pair[1]))
+        else:
+            found_pairs.append(pair)
+    for pair in control_pairs2:
+        if pair[0] == (-1, -1, -1) and pair[1] != (-1, -1, -1):
+            matches_index_control = control.get_complete_frame(frame).index(pair[1])
+            last_coord = control.get_last_location_check(control.match_list[matches_index_control], -1, frame - 1)
+            control_pairs.append((last_coord, pair[1]))
+        else:
+            control_pairs.append(pair)
+
+    for pair in found_pairs:
+        if pair[0] != (-1, -1, -1) and pair[1] != (-1, -1, -1):
+            # edge between two existing points
+            if pair in control_pairs:
+                tp += 1
+            else:
+                if (pair[0], (-1, -1, -1)) in control_pairs:
+                    fp += 1
+                else:
+                    fp += 1
+                    fn += 1
+
+        elif pair[0] == (-1, -1, -1) and pair[1] != (-1, -1, -1):
+            # marked as new, edge between existing point and (-1, -1, -1)
+            if pair in control_pairs:
+                tn += 1
+            else:
+                pass
+                # incorrectly marked as new, no change in results because the false positive edge is handled
+                # in one of the other cases
+
+        elif pair[0] != (-1, -1, -1) and pair[1] == (-1, -1, -1):
+            # marked as vanishing
+            if pair in control_pairs:
+                tn += 1
+            else:
+                fn += 1
+
+        else:
+            # (-1, -1, -1) matched with (-1, -1, -1) = point doesn't exist in this timeframe
+            pass
+
+    return [tp, tn, fp, fn]
+
+
 def get_xyz_coords(offset, sizex, sizey):
     """
     Computes 3-dimensional coordinates from offset
@@ -249,30 +313,44 @@ def convert_match_to_offset(match, sizex, sizey):
     return get_offset_from_xyz(match[0], sizex, sizey), get_offset_from_xyz(match[1], sizex, sizey)
 
 
-def apply_and_check(filename, sizex, sizey, xypxsize=125, zratio=0.125, framedif=1, maxdistnm=6250, logging=True):
+def apply_and_check(filename, sizex, sizey, xypxsize=125, zratio=0.125, framedif=1, maxdistnm=6250, logging=True, check_n_frames=0):
     points_list = read_points(filename, sizex, sizey)
     if len(points_list) == 0 and logging:
         logfile = open(filename + "." + str(int(time.time())) + ".log", "w")
         logfile.write("empty list")
         logfile.close()
         return 0
-    maxdistpx = 1.0/(maxdistnm/xypxsize)
+    maxdistpx = 1.0/(float(maxdistnm)/float(xypxsize))
+    print "maximum distance is", maxdistpx
+
     tipset = TipSet(sizex, sizey, points_list, maxdistpx)  # s moc malou hranici pada, proc?
-    for i in range(len(points_list)-1):
+    if check_n_frames == 0 or check_n_frames > len(points_list)-1:
+        check_n_frames = len(points_list)-1
+    for i in range(check_n_frames):
         G = tipset.get_max_bipartite_graph(framedif)
         matches = tipset.get_max_weight_matches(G)
         tipset.add_matches(matches, framedif)
 
     # checking section
     results = [0, 0, 0, 0, 0, 0]
+    results_f1 = [0., 0., 0., 0.]
     control = build_control_tipset(points_list, sizex, sizey)
-    for frame in range(1, len(points_list)):
+    for frame in range(1, check_n_frames+1):
         tempresults = check_found_and_control(tipset, control, frame, framedif)
+        tempresults2 = check_found_and_control_f1(tipset, control, frame, framedif)
         results = map(add, results, tempresults)
+        results_f1 = map(add, results_f1, tempresults2)
 
-    precision = float(results[0])/(results[0]+results[1])
-    recall = float(results[0])/(results[3]+results[0]+results[5])
-    f1score = (2*precision*recall)/(precision+recall)
+    try:
+        precision = results_f1[0]/(results_f1[0]+results_f1[2])
+        recall = results_f1[0]/(results_f1[0]+results_f1[3])
+        print "precision, recall", precision, recall
+        f1score = (2*precision*recall)/(precision+recall)
+    except ZeroDivisionError:
+        precision = 0
+        recall = 0
+        f1score = 0
+
     if logging:
         logfile = open(filename + "." + str(int(time.time())) + ".log", "w")
         logfile.write(
@@ -294,17 +372,16 @@ def apply_and_check(filename, sizex, sizey, xypxsize=125, zratio=0.125, framedif
     return f1score
 
 
-filename = "./real_images/real-control-01.txt"
-size_x, size_y = 220, 220
-
-results = [[0]+[125*(2**x) for x in range(0,10)]]
-for framegap in range(1, 10):
-    temp = [framegap-1]
-    for dist in [125*(2**x) for x in range(0, 10)]:
-        #print "logging for framedif", framegap, "and distance", dist, "nm"
-        f1score = apply_and_check(filename, size_x, size_y, framedif=framegap, maxdistnm=dist, logging=False)
-        temp.append(f1score)
-    results.append(temp)
+def generate_results(filename, sizex, sizey):
+    results = [[0]+[125*(2**x) for x in range(0,10)]]
+    for framegap in range(1, 10):
+        temp = [framegap-1]
+        for dist in [125*(2**x) for x in range(0, 10)]:
+            f1score = apply_and_check(filename, sizex, sizey, framedif=framegap, maxdistnm=dist, logging=False)
+            print "computing using framedif and maxdis", framegap, dist, "f1 score", f1score
+            temp.append(f1score)
+        results.append(temp)
+    return results
 
 
 def print_results(results):
@@ -336,7 +413,34 @@ def write_results(results, filename):
         result_file.write("\n")
     result_file.close()
 
+
+def add_2_results(results1, results2):
+    for i in range(1, len(results1)):
+        for j in range(1, len(results1[0])):
+            results1[i][j] = (results2[i][j] + results1[i][j])/2
+    return results1
+filename = "./real_images/real-overexpressing-01.txt"
+size_x, size_y = 350, 300
+files_list1 = [["./real_images/real-control-01.txt", 220, 220],
+               ["./real_images/real-control-02.txt", 220, 220],
+               ["./real_images/real-phosphodefective-01.txt", 300, 400],
+               ["./real_images/real-overexpressing-01.txt", 350, 300],
+               ["./real_images/real-overexpressing-02.txt", 350, 300],
+               ["./real_images/real-overexpressing-03.txt", 350, 300],
+               ["./real_images/real-phosphodefective-02.txt", 500, 600],
+               ["./real_images/real-phosphodefective-03.txt", 400, 270]]
+
+results = generate_results(files_list1[0][0], files_list1[0][1], files_list1[0][2])
+write_results(results, files_list1[0][0])
+for i in range(1, len(files_list1)):
+    results2 = generate_results(files_list1[i][0], files_list1[i][1], files_list1[i][2])
+    write_results(results, files_list1[i][0])
+    results = add_2_results(results, results2)
+
 print_results(results)
-write_results(results, filename)
-# print apply_and_check("./real_images/real-control-01.txt", 220, 220, framedif=2, maxdistnm=16000, logging=True)
+write_results(results, "./real_images/total-result.txt")
+print_results(results)
+
+#print apply_and_check(filename, size_x, size_y, framedif=1, maxdistnm=125, logging=True, check_n_frames=0)
+#print apply_and_check(filename, size_x, size_y, framedif=2, maxdistnm=1000, logging=True)
 
