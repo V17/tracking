@@ -21,4 +21,5 @@ if __name__ == '__main__':
     d = defaults.copy()
     d.update(command_line_args)
 
-    tracking.apply_and_check(d['inputfile'], d['x'], d['y'], d['framegap'], d['maxdistance'], d['log'])
+    pointset = tracking.read_points(d['inputfile'], d['x'], d['y'])
+    tracking.apply_and_write(d['inputfile'], d['x'], d['y'], pointset, d['framegap'], d['maxdistance'], d['log'])
